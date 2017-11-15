@@ -17,14 +17,31 @@ import os.path
 import re
 import sqlite3
 import sys
-# import time
+import time
 import uuid
 from lxml import etree
 from pathlib import Path
 
 error_list = []
 
-__version__ = '0.3'
+__version__ = '0.4'
+
+
+class Error(Exception):
+    pass
+
+
+class WrongCommitIntervalError(Error):
+    def __init__(self, commit_interval):
+        if commit_interval < 2000 and commit_interval > 0:
+            msg = "занадто малий"
+        else:
+            msg = "від'ємний або нульовий"
+        sys.stderr.write(
+            f'Вказаний інтервал запису змін в базу даних {msg}, що '
+            'недопустимо.\nВстановлено значення за замовчуванням, запис буде '
+            'здійснюватись через кожні 2 тисячі оброблених елементів.\n'
+)
 
 
 def process_element(elem, type_):
@@ -53,25 +70,24 @@ def process_element(elem, type_):
 
 
 def process_edrpou(args):
-    try:
-        sys.stdout.write('Processing file {}\n'.format(args.xml))
-        context = etree.iterparse(args.xml, events=('end',), tag='RECORD')
-        fast_iter(context, process_element, db=db, type_=args.type)
-        db.commit()
-        # indexing
-        print('\nIndexing...\n', end='', flush=True)
-        db.execute('CREATE INDEX IF NOT EXISTS `address` ON `edr` (`address` '
-                   'ASC);')
-        db.execute('CREATE INDEX IF NOT EXISTS `tin` ON `edr` (`tin` ASC);')
-        db.execute('CREATE INDEX IF NOT EXISTS `fname` ON `edr` (`full_name` '
-                   'ASC);')
-        db.execute('CREATE INDEX IF NOT EXISTS `uuid` ON `founders` '
-                   '(`uuid` ASC);')
-        db.execute('CREATE INDEX IF NOT EXISTS `founder` ON `founders`'
-                   '(`founder` ASC);')
-        sys.stdout.write('\nCompleted.\n')
-    except KeyboardInterrupt:
-        print('\nПерервано користувачем.')
+    sys.stdout.write('Обробка файлу {}\n'.format(args.xml))
+    context = etree.iterparse(args.xml, events=('end',), tag='RECORD')
+    counter = fast_iter(context, process_element, db=db, type_=args.type,
+        commit_after=args.commit)
+    db.commit()
+    # indexing
+    print('\nІндексація...\n', end='', flush=True)
+    db.execute('CREATE INDEX IF NOT EXISTS `address` ON `edr` (`address` '
+               'ASC);')
+    db.execute('CREATE INDEX IF NOT EXISTS `tin` ON `edr` (`tin` ASC);')
+    db.execute('CREATE INDEX IF NOT EXISTS `fname` ON `edr` (`full_name` '
+               'ASC);')
+    db.execute('CREATE INDEX IF NOT EXISTS `uuid` ON `founders` '
+               '(`uuid` ASC);')
+    db.execute('CREATE INDEX IF NOT EXISTS `founder` ON `founders`'
+               '(`founder` ASC);')
+    sys.stdout.write('\nЗавершено.\n')
+    return counter
 
 
 def guess_sex(name):
@@ -158,7 +174,7 @@ def insert(*args, **kwargs):
         raise
 
 
-def fast_iter(context, func, db, type_):
+def fast_iter(context, func, db, type_, commit_after=None):
     counter = 0
     # fast_iter is useful if you need to free memory while iterating
     # through a very large XML file.
@@ -175,11 +191,25 @@ def fast_iter(context, func, db, type_):
             counter += 1
             if counter % 10000 == 0:
                 print('.', end='', flush=True)
-            if counter % 2000 == 0:
+            if counter % commit_after == 0:
                 db.commit()
         del context
     except:
         raise
+    else:
+        return counter
+
+
+def show_time(records_processed, exec_time):
+    exec_time = int(round(exec_time, 0))
+    hours = minutes = seconds = 0
+    hours, remain = exec_time//3600, exec_time % 3600
+    if remain < 60:
+        seconds = remain
+        return hours, minutes, seconds
+    minutes, seconds = remain//60, remain % 60
+    print(f'Оброблено {records_processed} елементів за {hours:02d} год., '
+          f'{minutes:02d} хв. і {seconds:02d} сек.\n')
 
 
 def main():
@@ -196,9 +226,18 @@ def main():
         '-t', '--type', type=str, help='тип: u - юридичні, '
         'f - фізичні'
         )
-    args = parser.parse_args()
-    # print(args)
-    # sys.exit()
+    parser.add_argument('-c', '--commit', type=int, default=2000, 
+        help='Кількість оброблених елементів, після якої виконуватиметься '
+        'операція запису до БД (2000 за замовчуванням)')
+
+    try:
+        args = parser.parse_args()
+        # print(args)
+        # sys.exit()
+        if args.commit < 2000:
+            raise WrongCommitIntervalError(args.commit)
+    except WrongCommitIntervalError:
+        args.commit = 2000
 
     p = Path(args.xml)
     if not p.is_file():
@@ -208,8 +247,11 @@ def main():
         parser.error('Зазначено невірний тип осіб.\n'
                      'Використовуйте -u або -t\n')
         sys.exit()
-    process_edrpou(args)
+    start_time = time.time()
+    records_processed = process_edrpou(args)
     db.commit()
+    end_time = time.time()
+    return records_processed, end_time - start_time
 
 
 if __name__ == "__main__":
@@ -233,4 +275,10 @@ if __name__ == "__main__":
 
     c.execute('''create table if not exists founders (uuid text,
                  founder text);''')
-    main()
+    try:
+        records_processed, exec_time  = main()
+    except KeyboardInterrupt:
+        print('\nПерервано користувачем, все одно запишемо зміни...')
+        db.commit()
+    else:
+        show_time(records_processed, exec_time)

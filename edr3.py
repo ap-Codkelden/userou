@@ -206,8 +206,8 @@ def show_time(records_processed, exec_time):
     hours, remain = exec_time//3600, exec_time % 3600
     if remain < 60:
         seconds = remain
-        return hours, minutes, seconds
-    minutes, seconds = remain//60, remain % 60
+    else:
+        minutes, seconds = remain//60, remain % 60
     print(f'Оброблено {records_processed} елементів за {hours:02d} год., '
           f'{minutes:02d} хв. і {seconds:02d} сек.\n')
 
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     c.execute('''create table if not exists founders (uuid text,
                  founder text);''')
     try:
-        records_processed, exec_time  = main()
+        records_processed, exec_time = main()
     except KeyboardInterrupt:
         print('\nПерервано користувачем, все одно запишемо зміни...')
         db.commit()

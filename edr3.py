@@ -24,7 +24,7 @@ from pathlib import Path
 
 error_list = []
 
-__version__ = '0.4'
+__version__ = '0.4.1'
 
 
 class Error(Exception):

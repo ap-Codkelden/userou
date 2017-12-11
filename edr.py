@@ -11,7 +11,6 @@
 # stan dictionary according to SFS
 
 import argparse
-import json
 import logging
 import os.path
 import re

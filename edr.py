@@ -4,7 +4,7 @@
 # Copyright (c) 2016-2018 Renat Nasridinov
 # This software may be freely distributed under the MIT license.
 # https://opensource.org/licenses/MIT The MIT License (MIT)
-# source XML files are plased at
+# source XML files is plased at
 # http://data.gov.ua/passport/73cfe78e-89ef-4f06-b3ab-eb5f16aea237
 
 # TODO:

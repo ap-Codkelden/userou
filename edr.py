@@ -4,7 +4,7 @@
 # Copyright (c) 2016-2018 Renat Nasridinov
 # This software may be freely distributed under the MIT license.
 # https://opensource.org/licenses/MIT The MIT License (MIT)
-# source XML files is plased at
+# source XML files is placed at
 # http://data.gov.ua/passport/73cfe78e-89ef-4f06-b3ab-eb5f16aea237
 
 # TODO:
@@ -30,8 +30,8 @@ from pathlib import Path
 
 error_list = []
 
-__version__ = '0.5'
-DATASET_XML_INFO = 'http://data.gov.ua/view-dataset/dataset-file/218357'
+__version__ = '0.6'
+
 DATA_FILES = {
     'uo': '15.1-EX_XML_EDR_UO.xml',
     'fop': '15.2-EX_XML_EDR_FOP.xml'
@@ -61,8 +61,8 @@ class DownloadXMLFileError(Error):
         if type_:
             s = 'файлу опису '
         sys.stderr.write(
-            'Помилка завантаження ' + s + 'набору даних.\nПродовження '
-            'роботи неможливо\n'
+            f'Помилка завантаження {s}набору даних.\nПродовження '
+            'роботи неможливе.\n'
             )
 
 
@@ -243,7 +243,9 @@ def main(args):
 def get_dataset_info():
     tempdir = tempfile.gettempdir()
     try:
-        res = requests.get(DATASET_XML_INFO)
+        res = requests.get(
+            f'http://data.gov.ua/view-dataset/dataset-file/{DATASET_XML_ID}'
+            )
         if res.status_code != 200:
             raise DownloadXMLFileError(type_=1)
     except DownloadXMLFileError:
@@ -255,7 +257,8 @@ def get_dataset_info():
                 f.write(chunk)
         with open(temp_xml.name, 'rb') as f:
             g = f.read()
-
+            # rem
+            print(g)
         result = etree.fromstring(g)
         fileinfo = {
             'title': result.xpath('./title/text()')[0],
@@ -369,19 +372,30 @@ if __name__ == "__main__":
         sys.stdout.write(f'EDROU prosessor utility, v. \n{__version__}')
     parser = argparse.ArgumentParser(description='Process some XML.')
     parser.add_argument(
-        '-f', '--fop', help='обробляти дані фізичних осіб', action='store_true'
-        )
+        '-f', '--fop', help='обробляти також дані фізичних осіб',
+        action='store_true')
     parser.add_argument(
         '-c', '--commit', type=int, default=2000, help='Кількість оброблених '
         'елементів, після якої виконуватиметься операція запису до БД (2000 '
         'за замовчуванням)')
     parser.add_argument(
-        '--curdir', action='store_true', help='Використати поточну директорію '
-        'для розпаковки файлів замість системної тимчасової')
+        '--curdir', action='store_true', help='Використати поточну директорію'
+        ' для видобування файлів із ZIP-архіву замість системної тимчасової')
+    parser.add_argument(
+        '-id', type=int, default=0, help='id набору (остання частина URL '
+        'path з адреси розташування XML-файлу опису - `Забрати файл по API`, '
+        'наприклад у `http://data.gov.ua/view-dataset/dataset-file/218357` '
+        'це 218357\nЯкщо не вказано, швидше за все завантажиться старий файл,'
+        'наприклад оприлюднений 21.03.2018 17:19')
 
     try:
         args = parser.parse_args()
-        # print(args)
+        print(args)
+        # ID of the dataset taken from XML API file URL
+        # http://data.gov.ua/view-dataset/dataset-file/218357
+        # here is 218357
+        DATASET_XML_ID = args.id if args.id else 218357
+        print(DATASET_XML_ID)
         if args.commit < 2000:
             raise WrongCommitIntervalError(args.commit)
     except WrongCommitIntervalError:
@@ -396,7 +410,7 @@ if __name__ == "__main__":
         xml_files = download_file(
             url, extract_fop=args.fop, use_curdir=args.curdir
             )
-        # xml_files = ['15.2-EX_XML_EDR_FOP.xml','15.1-EX_XML_EDR_UO.xml',]
+
         db = sqlite3.connect(
             f'edr_3_{fileinfo["created"].split("T")[0]}.sqlite'
             )

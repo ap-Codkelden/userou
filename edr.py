@@ -257,8 +257,6 @@ def get_dataset_info():
                 f.write(chunk)
         with open(temp_xml.name, 'rb') as f:
             g = f.read()
-            # rem
-            print(g)
         result = etree.fromstring(g)
         fileinfo = {
             'title': result.xpath('./title/text()')[0],
@@ -390,7 +388,6 @@ if __name__ == "__main__":
 
     try:
         args = parser.parse_args()
-        print(args)
         # ID of the dataset taken from XML API file URL
         # http://data.gov.ua/view-dataset/dataset-file/218357
         # here is 218357

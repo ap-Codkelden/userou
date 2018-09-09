@@ -4,15 +4,16 @@
 # Copyright (c) 2016-2018 Renat Nasridinov
 # This software may be freely distributed under the MIT license.
 # https://opensource.org/licenses/MIT The MIT License (MIT)
-# source XML files is placed at
-# http://data.gov.ua/passport/73cfe78e-89ef-4f06-b3ab-eb5f16aea237
+# dataset URL is
+# https://data.gov.ua/dataset/1c7f3815-3259-45e0-bdf1-64dca07ddc10
 
 # TODO:
 # stan dictionary according to SFS ?
 # records as NamedTuples
 
-
 import argparse
+import hashlib
+import json
 import logging
 import os.path
 import re
@@ -23,15 +24,20 @@ import tempfile
 import time
 import uuid
 import zipfile
+from contextlib import suppress
 from datetime import datetime
 from lxml import etree
 from os import curdir, remove
 from pathlib import Path
 
-error_list = []
 
-__version__ = '0.6'
+__version__ = '0.7'
 
+# constants
+BUF_SIZE = 1048576
+DATASET_ID = '1c7f3815-3259-45e0-bdf1-64dca07ddc10'
+# chunk size for writing ZIP file
+WRITE_ZIP_CHUNK = 8388608  # 8Mb
 DATA_FILES = {
     'uo': '15.1-EX_XML_EDR_UO.xml',
     'fop': '15.2-EX_XML_EDR_FOP.xml'
@@ -40,6 +46,16 @@ DATA_FILES = {
 
 class Error(Exception):
     pass
+
+
+class WrongSHA1ChecksumError(Error):
+    '''Клас помилки порівняння конрольних сум завантаженого ZIP-файлу
+    '''
+    def __init__(self):
+        sys.stderr.write(
+            'Невірна контрольна SHA1 сума файлу, він пошкоджений.\n'
+            'Продовження роботи неможливе.\n'
+            )
 
 
 class WrongCommitIntervalError(Error):
@@ -57,19 +73,34 @@ class WrongCommitIntervalError(Error):
 
 class DownloadXMLFileError(Error):
     def __init__(self, type_=None):
-        s = ''
-        if type_:
-            s = 'файлу опису '
+        s = 'файлу опису ' if type_ else ''
         sys.stderr.write(
             f'Помилка завантаження {s}набору даних.\nПродовження '
             'роботи неможливе.\n'
             )
 
 
+class DownloadMetainfoError(Error):
+    def __init__(self, error_msg, type_):
+        res_type = 'мераінформації' if type_ == 'meta' else \
+            'інформації про ресурс'
+        sys.stderr.write(
+            f'Замість {res_type} отримано наступне повідомлення про '
+            f'помилку:\n{error_msg}\n'
+            )
+
+
+class UnknownError(Error):
+    def __init__(self):
+        sys.stderr.write(
+            f'Невідома помилка.\nПо можливості повідомте '
+            'про неї розробникам.\n'
+            )
+        sys.exit(1)
+
+
 class DateTimeString(str):
-    '''Converts  '21.03.2018 17:19'
-    to '2018-03-21T17:19'
-    with method to8601
+    '''Converts  "21.03.2018 17:19" to "2018-03-21T17:19" with method to8601
     '''
     def __init__(self, string):
         self.dtstring = string
@@ -124,7 +155,7 @@ def process_edrpou(xml_files, use_curdir):
         else:
             remove(os.path.join(working_directory, x))
     # indexing
-    print('\nІндексація...\n', end='', flush=True)
+    print('\nІндексація…\n', end='', flush=True)
     db.execute('CREATE INDEX IF NOT EXISTS `address` ON `edr` (`address` '
                'ASC);')
     db.execute('CREATE INDEX IF NOT EXISTS `tin` ON `edr` (`tin` ASC);')
@@ -184,8 +215,10 @@ def insert(*args, **kwargs):
                          kved_desc, stan, sex, kved, active) values
                          (?,?,?,?,?,?,?,?,?);''', qry_list)
     except (sqlite3.ProgrammingError, sqlite3.OperationalError):
-        print('>>> ARGS:', args, '\n>>> KWARGS:', kwargs,
-              '>>> QRY_LIST', qry_list)
+        print(
+            '>>> Error stack:\n',
+            {'args': args, 'kwargs': kwargs,
+             'qry_list': qry_list})
         raise
 
 
@@ -240,35 +273,42 @@ def main(args):
     return records_processed, end_time - start_time
 
 
-def get_dataset_info():
+def get_dataset_metainfo():
     tempdir = tempfile.gettempdir()
     try:
-        res = requests.get(
-            f'http://data.gov.ua/view-dataset/dataset-file/{DATASET_XML_ID}'
+        metainfo = requests.get(
+            'https://data.gov.ua/api/3/action/package_show',
+            params={'id': DATASET_ID}
             )
-        if res.status_code != 200:
-            raise DownloadXMLFileError(type_=1)
-    except DownloadXMLFileError:
-        sys.exit(1)
-    else:
-        temp_xml = tempfile.NamedTemporaryFile()
-        with open(temp_xml.name, 'wb') as f:
-            for chunk in res.iter_content(1024):
-                f.write(chunk)
-        with open(temp_xml.name, 'rb') as f:
-            g = f.read()
-        result = etree.fromstring(g)
+        metainfo_json = metainfo.json()
+        if not metainfo_json['success']:
+            raise DownloadMetainfoError(response_json['error']['message'],
+                                        type_='meta')
+        last_resourse_id = metainfo_json['result']['resources'][-1]['id']
+        resourse_data = requests.get(
+            'https://data.gov.ua/api/3/action/resource_show',
+            params={'id': last_resourse_id})
+        res_info = resourse_data.json()
+        if not res_info['success']:
+            raise DownloadMetainfoError(response_json['error']['message'],
+                                        type_='resourse')
+        res = res_info['result']
+        resourse_url = res['url']
         fileinfo = {
-            'title': result.xpath('./title/text()')[0],
-            'created': DateTimeString(
-                           result.xpath('./created/text()')[0]
-                           ).to8601(),
-            'filemime': result.xpath('./filemime/text()')[0],
-            'format': result.xpath('./format/text()')[0],
-            'filesize': int(result.xpath('./filesize/text()')[0])
+            'name': res['name'],
+            'created': res['archiver']['updated'].split("T")[0],
+            'filemime': res['mimetype'],
+            'format': res['format'],
+            'filesize': res['size'],
+            'sha1sum': res['archiver']['hash']
         }
-        url = result.xpath('./url/text()')[0]
-        return url, fileinfo
+    except DownloadMetainfoError:
+        sys.exit(1)
+    except:
+        raise  # UnknownError
+    else:
+        sys.stdout.write('Метаінформацію успішно отримано.\n')
+        return resourse_url, fileinfo
 
 
 def create_database():
@@ -293,11 +333,12 @@ def create_database():
         founder text);''')
 
     c.execute('''create table if not exists fileinfo (
-        title text,
+        name text,
         created text,
         filemime text,
         format text,
-        filesize integer);''')
+        filesize integer,
+        sha1sum text);''')
 
 
 def extract_XML(archive_name, extract_fop=None, use_curdir=None):
@@ -308,54 +349,77 @@ def extract_XML(archive_name, extract_fop=None, use_curdir=None):
         # debug level:
         # from 0 - no output to 3 - the most output
         zip_content = zf.namelist()
-        zf.debug = 3
+        zf.debug = 0
         unpack_dir = tempfile.gettempdir() if not use_curdir else curdir
         try:
-            print('Видобуваю... ', end='', flush=True)
+            print('Видобуваю… ', end='', flush=True)
             if extract_fop:
                 zf.extractall(path=unpack_dir)
             else:
                 zf.extract(DATA_FILES['uo'], path=unpack_dir)
-            print('OK :)\n')
+            print('OK\n')
             return zip_content
         except zipfile.BadZipFile:
-            print('Поганий ZIP-архів, виходжу...\n')
+            print('Поганий ZIP-архів, виходжу…\n')
             sys.exit(1)
         except OSError as e:
             if e.errno == 28:
-                print('Недостатньо місця для роіізпакування файлів')
+                print('Недостатньо місця для розпаковування файлів')
                 sys.exit(1)
+
+
+def checksum(zipfile_name):
+    sha1 = hashlib.sha1()
+    with open(zipfile_name, 'rb') as f:
+        while True:
+            data = f.read(BUF_SIZE)
+            if not data:
+                break
+            sha1.update(data)
+    return sha1.hexdigest()
 
 
 def download_file(url, **kwargs):
     try:
-        print('Завантажую, це може тривати певний час... ',
+        print('Завантажую, це може тривати певний час… ',
               end='', flush=True)
         res = requests.get(url)
         if res.status_code != 200:
             raise DownloadXMLFileError()
+        print('OK')
     except DownloadXMLFileError:
         print('Not OK :(\n')
         sys.exit(1)
     else:
         dataset_zip = tempfile.NamedTemporaryFile()
         with open(dataset_zip.name, 'wb') as f:
-            for chunk in res.iter_content(8388608):
+            for chunk in res.iter_content(WRITE_ZIP_CHUNK):
                 f.write(chunk)
-        print('OK :)\n')
-        # unzip here
-        names = extract_XML(
+    if kwargs['checksha1']:
+        try:
+            # check SHA1
+            downloaded_sha1 = checksum(dataset_zip.name)
+            if not downloaded_sha1 == kwargs['sha1sum']:
+                raise WrongSHA1ChecksumError()
+            else:
+                sys.stdout.write(
+                    'Контрольна сума SHA1 співпадає, продовжуємо…\n'
+                    )
+        except WrongSHA1ChecksumError:
+            sys.exit(1)
+    # unzip here
+    names = extract_XML(
             dataset_zip.name, extract_fop=kwargs['extract_fop'],
             use_curdir=kwargs['use_curdir']
             )
-        return names
+    return names
 
 
 def fill_fileinfo(fileinfo):
     try:
         c.execute(
-            "INSERT INTO fileinfo VALUES (:title, :created, :filemime,"
-            ":format, :filesize);", fileinfo
+            "INSERT INTO fileinfo VALUES (:name, :created, :filemime,"
+            ":format, :filesize, :sha1sum);", fileinfo
             )
     except:
         raise
@@ -380,36 +444,29 @@ if __name__ == "__main__":
         '--curdir', action='store_true', help='Використати поточну директорію'
         ' для видобування файлів із ZIP-архіву замість системної тимчасової')
     parser.add_argument(
-        '-id', type=int, default=0, help='id набору (остання частина URL '
-        'path з адреси розташування XML-файлу опису - `Забрати файл по API`, '
-        'наприклад у `http://data.gov.ua/view-dataset/dataset-file/218357` '
-        'це 218357\nЯкщо не вказано, швидше за все завантажиться старий файл,'
-        'наприклад оприлюднений 21.03.2018 17:19')
+        '--checksha1', action='store_true', help='Перевіряти контрольну суму '
+        'завантаженого ZIP-архіву (за замовчуванням -- ні)')
 
     try:
         args = parser.parse_args()
-        # ID of the dataset taken from XML API file URL
-        # http://data.gov.ua/view-dataset/dataset-file/218357
-        # here is 218357
-        DATASET_XML_ID = args.id if args.id else 218357
-        print(DATASET_XML_ID)
         if args.commit < 2000:
             raise WrongCommitIntervalError(args.commit)
     except WrongCommitIntervalError:
         args.commit = 2000
     try:
-        url, fileinfo = get_dataset_info()
+        url, fileinfo = get_dataset_metainfo()
         if not (url and fileinfo):
             raise DownloadXMLFileError(type_=1)
     except DownloadXMLFileError:
         exit()
     else:
         xml_files = download_file(
-            url, extract_fop=args.fop, use_curdir=args.curdir
+            url, sha1sum=fileinfo['sha1sum'], extract_fop=args.fop,
+            use_curdir=args.curdir, checksha1=args.checksha1
             )
 
         db = sqlite3.connect(
-            f'edr_3_{fileinfo["created"].split("T")[0]}.sqlite'
+            f'edr_3_{fileinfo["created"]}.sqlite'
             )
         c = db.cursor()
         create_database()
@@ -418,7 +475,13 @@ if __name__ == "__main__":
     try:
         records_processed, exec_time = main(args)
     except KeyboardInterrupt:
-        print('\nПерервано користувачем, все одно запишемо зміни...')
+        print('\nПерервано користувачем, все одно запишемо зміни…')
         db.commit()
+        working_directory = tempfile.gettempdir() if not args.curdir \
+            else args.curdir
+        # приберемося після себе
+        with suppress(FileNotFoundError):
+            for filename in xml_files:
+                os.remove(os.path.join(working_directory, filename))
     else:
         show_time(records_processed, exec_time)

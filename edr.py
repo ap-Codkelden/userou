@@ -363,12 +363,10 @@ def extract_XML(archive_name, extract_fop=None, use_curdir=None):
                 raise WrongFilesCountError(zip_count)
         except WrongFilesCountError:
             pass
-        else:
-            DATA_FILES = dict(
-                [z for z in map(
-                    lambda xml_filename: ('u' if 'UO' in xml_filename else 'f',
-                                          xml_filename), zip_content)])
-            print(DATA_FILES)
+        DATA_FILES = dict(
+            [z for z in map(
+                lambda xml_filename: ('u' if 'UO' in xml_filename else 'f',
+                                      xml_filename), zip_content)])
         zf.debug = 0
         unpack_dir = tempfile.gettempdir() if not use_curdir else getcwd()
         try:

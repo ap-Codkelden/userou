@@ -14,3 +14,7 @@
 * Python 3.6+
 * [lxml](https://pypi.org/project/lxml/)
 * [requests](https://pypi.org/project/requests/)
+
+Для операційних систем Windows® скомпільовані версії бібліотек краще завантажувати 
+з [ресурсу](https://www.lfd.uci.edu/~gohlke/pythonlibs/) Крістофера Гольке, де 
+містяться вже скомпільовані версії бібліотек для різних архітектур.

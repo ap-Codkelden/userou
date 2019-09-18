@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 # Copyright (c) 2016-2018 Renat Nasridinov
@@ -10,6 +10,7 @@
 # TODO:
 # stan dictionary according to SFS ?
 # records as NamedTuples
+# make guess_sex optional
 
 import argparse
 import hashlib
@@ -27,21 +28,17 @@ import zipfile
 from contextlib import suppress
 from datetime import datetime
 from lxml import etree
-from os import curdir, remove
+from os import getcwd, remove
 from pathlib import Path
 
 
-__version__ = '0.7'
+__version__ = '0.8'
 
 # constants
 BUF_SIZE = 1048576
 DATASET_ID = '1c7f3815-3259-45e0-bdf1-64dca07ddc10'
 # chunk size for writing ZIP file
 WRITE_ZIP_CHUNK = 8388608  # 8Mb
-DATA_FILES = {
-    'uo': '15.1-EX_XML_EDR_UO.xml',
-    'fop': '15.2-EX_XML_EDR_FOP.xml'
-    }
 
 
 class Error(Exception):
@@ -53,7 +50,7 @@ class WrongSHA1ChecksumError(Error):
     '''
     def __init__(self):
         sys.stderr.write(
-            'Невірна контрольна SHA1 сума файлу, він пошкоджений.\n'
+            'неправильна контрольна SHA1 сума файлу, він пошкоджений.\n'
             'Продовження роботи неможливе.\n'
             )
 
@@ -87,6 +84,18 @@ class DownloadMetainfoError(Error):
         sys.stderr.write(
             f'Замість {res_type} отримано наступне повідомлення про '
             f'помилку:\n{error_msg}\n'
+            )
+
+
+class WrongFilesCountError(Error):
+    '''Клас помилки неправильної кількості файлів у ZIP-архіві. Має
+    бути 2: один для юридичних, інший для фізичних.
+    '''
+    def __init__(self, files_count):
+        self.files_count = files_count
+        sys.stderr.write(
+            f'В архіві не два файли, а {self.files_count}.\n'
+            'Можливо варто перевірити його вміст і повідомити розробників.\n'
             )
 
 
@@ -133,12 +142,11 @@ def process_element(elem, is_fop):
     return l
 
 
-def process_edrpou(xml_files, use_curdir):
+def process_edrpou(xml_files, process_fop, curdir):
     total_records = 0
     for x in xml_files:
         try:
-            process_fop = False if x == DATA_FILES['uo'] else True
-            working_directory = tempfile.gettempdir() if not use_curdir \
+            working_directory = tempfile.gettempdir() if not curdir \
                 else curdir
             context = etree.iterparse(
                 os.path.join(working_directory, x), events=('end',),
@@ -260,14 +268,14 @@ def show_time(records_processed, exec_time):
           f'{minutes:02d} хв. і {seconds:02d} сек.\n')
 
 
-def main(args):
+def main(args, xml_files):
     records_processed = 0
     if args.fop:
-        xml_files = [DATA_FILES['uo'], DATA_FILES['fop']]
+        xml_file_list = xml_files.values()
     else:
-        xml_files = [DATA_FILES['uo']]
+        xml_file_list = [xml_files['u']]
     start_time = time.time()
-    records_processed += process_edrpou(xml_files, args.curdir)
+    records_processed += process_edrpou(xml_file_list, args.fop, args.curdir)
     db.commit()
     end_time = time.time()
     return records_processed, end_time - start_time
@@ -348,17 +356,29 @@ def extract_XML(archive_name, extract_fop=None, use_curdir=None):
     with zipfile.ZipFile(archive_name) as zf:
         # debug level:
         # from 0 - no output to 3 - the most output
-        zip_content = zf.namelist()
+        try:
+            zip_content = zf.namelist()
+            zip_count = len(zip_content)
+            if zip_count != 2:
+                raise WrongFilesCountError(zip_count)
+        except WrongFilesCountError:
+            pass
+        else:
+            DATA_FILES = dict(
+                [z for z in map(
+                    lambda xml_filename: ('u' if 'UO' in xml_filename else 'f',
+                                          xml_filename), zip_content)])
+            print(DATA_FILES)
         zf.debug = 0
-        unpack_dir = tempfile.gettempdir() if not use_curdir else curdir
+        unpack_dir = tempfile.gettempdir() if not use_curdir else getcwd()
         try:
             print('Видобуваю… ', end='', flush=True)
             if extract_fop:
                 zf.extractall(path=unpack_dir)
             else:
-                zf.extract(DATA_FILES['uo'], path=unpack_dir)
+                zf.extract(DATA_FILES['u'], path=unpack_dir)
             print('OK\n')
-            return zip_content
+            return DATA_FILES
         except zipfile.BadZipFile:
             print('Поганий ZIP-архів, виходжу…\n')
             sys.exit(1)
@@ -432,7 +452,9 @@ if __name__ == "__main__":
     except UnicodeEncodeError:
         logging.warning('Wrong terminal encoding, show English version')
         sys.stdout.write(f'EDROU prosessor utility, v. \n{__version__}')
-    parser = argparse.ArgumentParser(description='Process some XML.')
+    parser = argparse.ArgumentParser(
+        description='Обробка XML-файлів з даними Єдиного державного реєстру '
+        'юридичних осіб, фізичних осіб-підприємців та громадських формувань.')
     parser.add_argument(
         '-f', '--fop', help='обробляти також дані фізичних осіб',
         action='store_true')
@@ -473,7 +495,7 @@ if __name__ == "__main__":
         fill_fileinfo(fileinfo)
 
     try:
-        records_processed, exec_time = main(args)
+        records_processed, exec_time = main(args, xml_files)
     except KeyboardInterrupt:
         print('\nПерервано користувачем, все одно запишемо зміни…')
         db.commit()

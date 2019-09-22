@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Copyright (c) 2016-2018 Renat Nasridinov
+# Copyright (c) 2016-2019 Renat Nasridinov
 # This software may be freely distributed under the MIT license.
 # https://opensource.org/licenses/MIT The MIT License (MIT)
 # dataset URL is
@@ -430,6 +430,8 @@ def download_file(url, **kwargs):
             dataset_zip.name, extract_fop=kwargs['extract_fop'],
             use_curdir=kwargs['use_curdir']
             )
+    print(names)
+    exit()
     return names
 
 

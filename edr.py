@@ -430,8 +430,6 @@ def download_file(url, **kwargs):
             dataset_zip.name, extract_fop=kwargs['extract_fop'],
             use_curdir=kwargs['use_curdir']
             )
-    print(names)
-    exit()
     return names
 
 

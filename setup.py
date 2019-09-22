@@ -9,7 +9,7 @@ setup(
     author_email='mavladi@gmail.com',
     install_requires=['lxml', 'requests'],
     license='MIT',
-    packages=find_packages(),
+    packages=find_packages(include=['userou', 'userou.*']),
     classifiers=[
         'Development Status :: 4 - Beta',
         'Programming Language :: Python :: 3.6',

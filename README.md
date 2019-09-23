@@ -11,7 +11,7 @@
 
 #### З WHL файлу
 
-1. З розділу [**Releases**](https://github.com/ap-Codkelden/userou/releases) завантажити \*.whl файл, напр. `userou-0.8-py3-none-any.whl`
+1. З розділу [**Releases**](https://github.com/ap-Codkelden/userou/releases) завантажити `\*.whl` файл, напр. `userou-0.8-py3-none-any.whl`
 1. Запустити установку: `pip install userou-0.8-py3-none-any.whl`
 
 При застосуванні цього методу можливо доведеться вказувати шлях до файлу 
